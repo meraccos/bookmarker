@@ -1,6 +1,6 @@
 # Bookmarker
 
-A **minimal**, private bookmark library built natively for macOS. Save pages from Safari, read clean offline copies, search downloaded text, and keep your library in iCloud Drive.
+Tired of bloated and paid bookmark organizers? A **minimal**, private bookmark library built natively for macOS. Save pages from Safari, read clean offline copies, search downloaded text, and keep your library in iCloud Drive.
 
 <p align="center">
   <img src="docs/bookmarker.png" alt="Bookmarker showing a saved reading list" width="760">
