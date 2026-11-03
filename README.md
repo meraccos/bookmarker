@@ -52,3 +52,7 @@ Run the checks with:
 ## Privacy
 
 Bookmarker has no analytics, advertising, account, or hosted backend. It connects only to pages you save to fetch metadata and readable text, and to iCloud Drive when you use an iCloud-backed library.
+
+## License
+
+Bookmarker is open-source software licensed under the [GNU General Public License v3.0](LICENSE).
