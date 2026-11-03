@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Save to Bookmarker",
+  "version": "0.3.0",
+  "description": "Save the current page to your Bookmarker Inbox when you choose the right-click action.",
+  "permissions": ["activeTab", "contextMenus", "nativeMessaging"],
+  "background": {
+    "scripts": ["background.js"],
+    "service_worker": "background.js",
+    "preferred_environment": ["service_worker", "document"]
+  }
+}
