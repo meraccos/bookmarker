@@ -1,8 +1,9 @@
-import Foundation
 import BookmarkCore
+import Foundation
 
 @main struct LibraryChecks {
     @MainActor static func main() async throws {
+        try await checkSharedReadingCopies()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("BookmarkerChecks-\(UUID())")
         defer { try? FileManager.default.removeItem(at: folder) }
         let library = Library(folder: folder)
@@ -15,11 +16,13 @@ import BookmarkCore
         precondition(library.bookmarks == saved, "Unchanged reload must preserve records")
 
         let file = folder.appendingPathComponent("\(bookmark.id.uuidString).json")
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
         bookmark.title = "External title"
         try encoder.encode(bookmark).write(to: file, options: .atomic)
         library.reload()
-        precondition(library.bookmarks.first?.title == "External title", "External edits must invalidate cached records")
+        precondition(
+            library.bookmarks.first?.title == "External title", "External edits must invalidate cached records")
 
         var stale = library.bookmarks[0]
         bookmark.notes = "External comment"
@@ -40,16 +43,23 @@ import BookmarkCore
         try cachedHTML.write(to: reader, atomically: true, encoding: .utf8)
         let loadedHTML = try await library.readerHTML(bookmark.id)
         precondition(loadedHTML == cachedHTML, "Saved reading copies must load without a network request")
-        precondition(library.cachedReaderHTML(bookmark.id) == cachedHTML, "Recently viewed articles must be available from the bounded memory cache")
+        precondition(
+            library.cachedReaderHTML(bookmark.id) == cachedHTML,
+            "Recently viewed articles must be available from the bounded memory cache")
         await library.migrateReadingCopies()
-        let organizedReader = library.readingCopiesFolder.appendingPathComponent("\(bookmark.id.uuidString).reader.html")
+        let organizedReader = library.readingCopiesFolder.appendingPathComponent(
+            "\(bookmark.id.uuidString).reader.html")
         precondition(FileManager.default.fileExists(atPath: organizedReader.path))
         precondition(!FileManager.default.fileExists(atPath: reader.path))
         let previousCopies = folder.appendingPathComponent("Reading Copies")
         try FileManager.default.createDirectory(at: previousCopies, withIntermediateDirectories: true)
-        try cachedHTML.write(to: previousCopies.appendingPathComponent("\(bookmark.id.uuidString).reader.html"), atomically: true, encoding: .utf8)
+        try cachedHTML.write(
+            to: previousCopies.appendingPathComponent("\(bookmark.id.uuidString).reader.html"), atomically: true,
+            encoding: .utf8)
         await library.migrateReadingCopies()
-        precondition(!FileManager.default.fileExists(atPath: previousCopies.path), "Legacy iCloud reading folders must leave the library")
+        precondition(
+            !FileManager.default.fileExists(atPath: previousCopies.path),
+            "Legacy iCloud reading folders must leave the library")
         precondition(FileManager.default.fileExists(atPath: organizedReader.path))
         precondition(library.readingCopyCount == 1 && library.readingCopyBytes == cachedHTML.utf8.count)
         let migratedHTML = try await library.readerHTML(bookmark.id)
@@ -59,11 +69,26 @@ import BookmarkCore
             if !library.downloadProgress.running { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        precondition(!library.downloadProgress.running && library.downloadProgress.completed == 1 && library.downloadProgress.failed == 0, "Bulk saving must reuse existing offline files")
+        precondition(
+            !library.downloadProgress.running && library.downloadProgress.completed == 1
+                && library.downloadProgress.failed == 0, "Bulk saving must reuse existing offline files")
 
         let undo = UndoManager()
         undo.groupsByEvent = false
         library.undoManager = undo
+        let topicA = Bookmark(url: "https://example.com/topic-a", topics: ["Before"], notes: "Keep notes")
+        let topicB = Bookmark(url: "https://example.com/topic-b", topics: ["Before"])
+        precondition(library.save(topicA) && library.save(topicB))
+        precondition(library.renameTopic("Before", to: " After "))
+        precondition(library.bookmarks.filter { $0.topics == ["After"] }.count == 2)
+        precondition(library.bookmarks.first(where: { $0.id == topicA.id })?.notes == "Keep notes")
+        undo.undo()
+        precondition(library.bookmarks.filter { $0.topics == ["Before"] }.count == 2)
+        undo.redo()
+        precondition(library.bookmarks.filter { $0.topics == ["After"] }.count == 2)
+        precondition(!library.renameTopic("After", to: "   "))
+        precondition(library.remove(topicA.id) && library.remove(topicB.id))
+        undo.removeAllActions()
         library.update(bookmark.id) { $0.isRead = true }
         precondition(undo.canUndo && library.bookmarks.first?.isRead == true)
         undo.undo()
@@ -89,10 +114,12 @@ import BookmarkCore
         // Website metadata can finish between a user action and Undo.
         var enriched = library.bookmarks[0]
         enriched.pageDescription = "Fresh metadata"
+        enriched.readingMinutes = 7
         precondition(library.save(enriched))
         undo.undo()
         precondition(library.bookmarks.first?.isRead == false)
         precondition(library.bookmarks.first?.pageDescription == "Fresh metadata")
+        precondition(library.bookmarks.first?.readingMinutes == 7)
         // Undo must preserve later edits from another Mac or agent.
         library.update(bookmark.id) { $0.isRead = true }
         var externalEdit = library.bookmarks[0]
@@ -120,7 +147,9 @@ import BookmarkCore
         undo.removeAllActions()
         let beforeNoOp = library.bookmarks
         library.update(second.id) { $0.move(to: "Original topic") }
-        precondition(library.bookmarks == beforeNoOp && !undo.canUndo, "Dropping into the same topic must not create an undo action")
+        precondition(
+            library.bookmarks == beforeNoOp && !undo.canUndo,
+            "Dropping into the same topic must not create an undo action")
         try FileManager.default.removeItem(at: folder.appendingPathComponent("\(second.id.uuidString).json"))
         library.reload()
 
@@ -144,15 +173,19 @@ import BookmarkCore
             if library.bookmarks.first?.notes == notified.notes { break }
             try await Task.sleep(for: .milliseconds(30))
         }
-        precondition(library.bookmarks.first?.notes == notified.notes, "Native file notifications must reload external edits")
+        precondition(
+            library.bookmarks.first?.notes == notified.notes, "Native file notifications must reload external edits")
 
         // An extension request must reuse existing bookmarks after reloading external state.
         var externalSafari = library.bookmarks[0]
         externalSafari.url = "https://example.com/safari-already-saved"
         try encoder.encode(externalSafari).write(to: file, options: .atomic)
-        let saveRequest = BookmarkSaveRequest(url: URL(string: "bookmarker://save?url=https%3A%2F%2Fexample.com%2Fsafari-already-saved&title=Safari")!)!
+        let saveRequest = BookmarkSaveRequest(
+            url: URL(string: "bookmarker://save?url=https%3A%2F%2Fexample.com%2Fsafari-already-saved&title=Safari")!)!
         let safariID = await library.addFromSafari(saveRequest)
-        precondition(safariID == externalSafari.id && library.bookmarks.count == 1, "Safari requests must reload before duplicate detection")
+        precondition(
+            safariID == externalSafari.id && library.bookmarks.count == 1,
+            "Safari requests must reload before duplicate detection")
 
         // Backups preserve JSON (including comments), skip daily duplicates, and rotate.
         let backupRoot = folder.deletingLastPathComponent().appendingPathComponent("BackupChecks-\(UUID())")
@@ -167,7 +200,8 @@ import BookmarkCore
         let skippedBackups = try LibraryBackup.snapshots(in: backupRoot)
         precondition(skippedBackups.count == 1)
         for day in 1...9 {
-            try LibraryBackup.create(source: folder, destination: backupRoot, force: true, now: now.addingTimeInterval(Double(day) * 86400))
+            try LibraryBackup.create(
+                source: folder, destination: backupRoot, force: true, now: now.addingTimeInterval(Double(day) * 86400))
         }
         let rotatedBackups = try LibraryBackup.snapshots(in: backupRoot)
         precondition(rotatedBackups.count == 7)
@@ -179,7 +213,9 @@ import BookmarkCore
         precondition(migratedData == backupData)
         precondition(FileManager.default.fileExists(atPath: file.path))
         let copiedReader = cloudFixture.appendingPathComponent("Reading Copies/\(bookmark.id.uuidString).reader.html")
-        precondition(!FileManager.default.fileExists(atPath: copiedReader.path), "Reading content must never be copied into iCloud")
+        precondition(
+            !FileManager.default.fileExists(atPath: copiedReader.path),
+            "Reading content must never be copied into iCloud")
         try LibraryCloudSetup.copyLibrary(from: folder, to: cloudFixture)
         let conflicting = Data("different data".utf8)
         let cloudBookmark = cloudFixture.appendingPathComponent(file.lastPathComponent)
@@ -187,7 +223,7 @@ import BookmarkCore
         do {
             try LibraryCloudSetup.copyLibrary(from: folder, to: cloudFixture)
             preconditionFailure("Migration must refuse a different bookmark with the same ID")
-        } catch is LibraryCloudSetup.SetupError { }
+        } catch is LibraryCloudSetup.SetupError {}
         let preservedConflict = try Data(contentsOf: cloudBookmark)
         precondition(preservedConflict == conflicting)
         let preservedOriginal = try Data(contentsOf: file)
@@ -208,6 +244,59 @@ import BookmarkCore
         try FileManager.default.removeItem(at: file)
         library.reload()
         precondition(library.bookmarks.isEmpty, "External deletion must remove the cached record")
-        print("Passed library reload, external-edit, conflict, save, offline-reader, Undo/Redo, external-undo conflict, damaged-file and deletion checks.")
+        print(
+            "Passed library reload, external-edit, conflict, save, offline-reader, Undo/Redo, external-undo conflict, damaged-file and deletion checks."
+        )
+    }
+
+    @MainActor static func checkSharedReadingCopies() async throws {
+        final class Counter { var downloads = 0 }
+        let counter = Counter()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ReaderChecks-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let html = "<html><main>Saved article text for offline reading.</main></html>"
+        let library = Library(folder: folder) { _ in
+            counter.downloads += 1
+            try await Task.sleep(for: .milliseconds(100))
+            return html
+        }
+        let first = Bookmark(url: "https://example.com/article#first")
+        let second = Bookmark(url: "https://example.com/article#second")
+        precondition(library.save(first) && library.save(second))
+        async let a = library.readerHTML(first.id)
+        async let b = library.readerHTML(second.id)
+        let results = try await (a, b)
+        precondition(results.0 == html && results.1 == html && counter.downloads == 1)
+        precondition(library.bookmarks.allSatisfy { $0.readingMinutes == 1 })
+        precondition(library.cachedReaderHTML(first.id) == html && library.cachedReaderHTML(second.id) == html)
+        let firstFile = library.readingCopiesFolder.appendingPathComponent("\(first.id.uuidString).reader.html")
+        let secondFile = library.readingCopiesFolder.appendingPathComponent("\(second.id.uuidString).reader.html")
+        let firstInode =
+            try FileManager.default.attributesOfItem(atPath: firstFile.path)[.systemFileNumber] as? NSNumber
+        let secondInode =
+            try FileManager.default.attributesOfItem(atPath: secondFile.path)[.systemFileNumber] as? NSNumber
+        precondition(firstInode != nil && firstInode == secondInode, "Shared URLs should share disk storage")
+        await library.refreshReadingCopyStats()
+        precondition(library.readingCopyCount == 2 && library.readingCopyBytes == html.utf8.count)
+        let third = Bookmark(url: "https://example.com/shared-cancellation")
+        let fourth = Bookmark(url: third.url)
+        precondition(library.save(third) && library.save(fourth))
+        let dismissed = Task { try await library.readerHTML(third.id, cancelOnDismiss: true) }
+        while counter.downloads < 2 { await Task.yield() }
+        let remaining = Task { try await library.readerHTML(fourth.id) }
+        try await Task.sleep(for: .milliseconds(25))
+        dismissed.cancel()
+        let survivingHTML = try await remaining.value
+        precondition(
+            survivingHTML == html && counter.downloads == 2, "Dismissing one reader must not cancel another caller")
+        _ = try? await dismissed.value
+        let reopened = Library(folder: folder) { _ in
+            preconditionFailure("Saved URLs must never be downloaded again")
+        }
+        precondition(library.remove(first.id))
+        let replacement = Bookmark(url: first.url)
+        precondition(reopened.save(replacement))
+        let reused = try await reopened.readerHTML(replacement.id)
+        precondition(reused == html)
     }
 }

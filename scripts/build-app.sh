@@ -2,7 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ./scripts/swift.sh build -c release --product Bookmarker
-APP="$PWD/dist/Bookmarker.app"
+BUILD_STAGING=$(mktemp -d -t bookmarker-build)
+trap 'rm -rf -- "$BUILD_STAGING"' EXIT
+APP="$BUILD_STAGING/Bookmarker.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Bookmarker "$APP/Contents/MacOS/Bookmarker"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -27,11 +29,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 EXTENSION="$APP/Contents/PlugIns/BookmarkerSafari.appex"
 mkdir -p "$EXTENSION/Contents/MacOS"
-SDK_PATH=$(xcrun --show-sdk-path)
-if [[ -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]]; then
-  SDK_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
-fi
-clang -fobjc-arc -fapplication-extension -isysroot "$SDK_PATH" -mmacosx-version-min=14.0 \
+source ./scripts/build-config.sh
+clang -fobjc-arc -fapplication-extension -isysroot "$BOOKMARKER_SDK_PATH" -mmacosx-version-min=14.0 \
   -framework SafariServices -framework AppKit -framework Foundation \
   -Wl,-e,_NSExtensionMain SafariExtension/SafariExtensionHandler.m \
   -o "$EXTENSION/Contents/MacOS/BookmarkerSafari"
@@ -39,6 +38,18 @@ cp SafariExtension/Info.plist "$EXTENSION/Contents/Info.plist"
 mkdir -p "$EXTENSION/Contents/Resources"
 cp SafariExtension/Resources/* "$EXTENSION/Contents/Resources/"
 SIGNING_IDENTITY="${BOOKMARKER_SIGNING_IDENTITY:--}"
+xattr -cr "$APP"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements SafariExtension/entitlements.plist "$EXTENSION"
 codesign --force --sign "$SIGNING_IDENTITY" "$APP"
-echo "Built $APP"
+codesign --verify --deep --strict "$APP"
+mkdir -p "$PWD/dist"
+ditto --norsrc --noextattr "$APP" "$PWD/dist/Bookmarker.app"
+# A file provider may restore FinderInfo immediately after publishing the bundle.
+for attempt in 1 2 3; do
+  xattr -cr "$PWD/dist/Bookmarker.app"
+  if codesign --verify --deep --strict "$PWD/dist/Bookmarker.app" 2>/dev/null; then
+    break
+  fi
+done
+codesign --verify --deep --strict "$PWD/dist/Bookmarker.app"
+echo "Built $PWD/dist/Bookmarker.app"

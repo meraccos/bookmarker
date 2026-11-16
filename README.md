@@ -62,6 +62,10 @@ Separate files reduce unrelated sync conflicts. Changes detected before saving c
 
 Existing `Reading Copies` folders inside an older library are migrated to local storage and moved out of the iCloud library. New downloads never write reading content into iCloud.
 
+Readable text is cached by URL in `Reading Copies/By URL` and reused without a website request. URL fragments share a copy; query strings remain distinct. Per-library UUID files are hard links where supported, with a copy fallback on other filesystems. Deleting a bookmark keeps the URL cache so saving the same link again works offline. Offline-reading statistics count this library’s aliases and count shared file bytes once; retained cache entries for deleted bookmarks are outside that per-library total.
+
+Development uses `scripts/build-config.sh` for SDK selection. Run `swift format format --in-place --recursive Sources Tests` to apply the repository’s `.swift-format` conventions, and `swift format lint --strict --recursive Sources Tests` to check them. Background metadata and comment writes use the shared conflict-checked persistence helper off the main actor; synchronous user actions and native Undo retain immediate commit semantics.
+
 ## Backups
 
 The app keeps seven daily local snapshots under `~/Library/Application Support/Bookmarker/Backups`, separated by library path. It checks on launch and hourly while open; **Back Up Now** creates an immediate snapshot. **Show Backups** opens them in Finder. A completed snapshot is published atomically before older ones are rotated. Backups contain all bookmark JSON, including comments, topics, favorites and read state, but do not duplicate regenerable reading HTML. Each snapshot includes recovery instructions. Backups stay outside iCloud so a synchronized deletion cannot delete the backup. A separate pre-migration snapshot is made before copying a library to iCloud.

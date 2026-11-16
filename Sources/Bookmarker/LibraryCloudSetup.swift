@@ -3,12 +3,16 @@ import Foundation
 /// The app uses an ordinary portable folder in iCloud Drive, not a private CloudKit database.
 enum LibraryCloudSetup {
     static var defaultLocalFolder: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Bookmarker/Library", isDirectory: true)
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(
+            "Bookmarker/Library", isDirectory: true)
     }
     static func cloudFolder() -> URL? {
-        let drive = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
+        let drive = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+            "Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
         var directory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: drive.path, isDirectory: &directory), directory.boolValue else { return nil }
+        guard FileManager.default.fileExists(atPath: drive.path, isDirectory: &directory), directory.boolValue else {
+            return nil
+        }
         return drive.appendingPathComponent("Bookmarker/Library", isDirectory: true)
     }
     /// Copy first, then switch. Originals remain available if iCloud or the app stops midway.
@@ -17,11 +21,17 @@ enum LibraryCloudSetup {
         let fm = FileManager.default
         let sourceParts = source.resolvingSymlinksInPath().pathComponents
         let destinationParts = destination.resolvingSymlinksInPath().pathComponents
-        guard !destinationParts.starts(with: sourceParts), !sourceParts.starts(with: destinationParts) else { throw CocoaError(.fileWriteInvalidFileName) }
+        guard !destinationParts.starts(with: sourceParts), !sourceParts.starts(with: destinationParts) else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
         try CoordinatedFiles.read(source) { source in
             try CoordinatedFiles.write(destination) { destination in
-                guard let files = fm.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: .skipsHiddenFiles) else { throw CocoaError(.fileReadUnknown) }
+                guard
+                    let files = fm.enumerator(
+                        at: source, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                        options: .skipsHiddenFiles)
+                else { throw CocoaError(.fileReadUnknown) }
                 // Validate all collisions before writing anything.
                 var copies: [(URL, Data)] = []
                 for case let file as URL in files {
@@ -41,7 +51,8 @@ enum LibraryCloudSetup {
                         continue
                     }
                     // An evicted destination is an existing file too; never overwrite its placeholder.
-                    let placeholder = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).icloud")
+                    let placeholder = target.deletingLastPathComponent().appendingPathComponent(
+                        ".\(target.lastPathComponent).icloud")
                     guard !fm.fileExists(atPath: placeholder.path) else { throw SetupError.collision(relative) }
                     copies.append((target, data))
                 }
@@ -56,7 +67,8 @@ enum LibraryCloudSetup {
         case collision(String)
         var errorDescription: String? {
             switch self {
-            case .collision(let name): "The iCloud library already has a different or undownloaded copy of \(name). Your current library was kept. Download and reconcile the existing file before trying again."
+            case .collision(let name):
+                "The iCloud library already has a different or undownloaded copy of \(name). Your current library was kept. Download and reconcile the existing file before trying again."
             }
         }
     }

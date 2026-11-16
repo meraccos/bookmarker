@@ -10,8 +10,7 @@ public struct BookmarkSummary {
     public init(_ bookmarks: [Bookmark]) {
         for bookmark in bookmarks {
             if bookmark.isFavorite { favorites += 1 }
-            if let topic = bookmark.topics.first { topicCounts[topic, default: 0] += 1 }
-            else { inbox += 1 }
+            if let topic = bookmark.topics.first { topicCounts[topic, default: 0] += 1 } else { inbox += 1 }
         }
     }
 }

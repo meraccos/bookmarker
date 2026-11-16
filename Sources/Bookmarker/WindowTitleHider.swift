@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 // Measure the toolbar's real position instead of guessing native toolbar margins.
 struct WindowTitleHider: NSViewRepresentable {
@@ -18,7 +18,10 @@ struct WindowTitleHider: NSViewRepresentable {
         var measuresTrailingEdge = false
         private var lastLeading: CGFloat?
         private var divider: DividerSurface?
-        func removeDivider() { divider?.removeFromSuperview(); divider = nil }
+        func removeDivider() {
+            divider?.removeFromSuperview()
+            divider = nil
+        }
         private func updateDivider(at x: CGFloat) {
             guard measuresTrailingEdge, let host = window?.contentView?.superview else { return }
             if divider?.superview !== host {
@@ -38,8 +41,15 @@ struct WindowTitleHider: NSViewRepresentable {
             if window.title != " " { window.title = " " }
             if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none }
         }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configureWindow(); reportPosition() }
-        override func layout() { super.layout(); reportPosition() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            configureWindow()
+            reportPosition()
+        }
+        override func layout() {
+            super.layout()
+            reportPosition()
+        }
         func reportPosition() {
             guard window != nil else { return }
             let frame = convert(bounds, to: nil)

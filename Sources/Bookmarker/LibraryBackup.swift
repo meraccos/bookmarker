@@ -1,5 +1,5 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 /// Local snapshots deliberately live outside iCloud, so a synced deletion cannot erase them.
 enum LibraryBackup {
@@ -14,14 +14,21 @@ enum LibraryBackup {
     }
     static func snapshots(in destination: URL) throws -> [URL] {
         guard FileManager.default.fileExists(atPath: destination.path) else { return [] }
-        return try FileManager.default.contentsOfDirectory(at: destination, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-            .filter { $0.lastPathComponent.hasPrefix("Snapshot-") }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        return try FileManager.default.contentsOfDirectory(
+            at: destination, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
+        )
+        .filter { $0.lastPathComponent.hasPrefix("Snapshot-") }.sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
-    @discardableResult static func create(source: URL, destination: URL, force: Bool, now: Date = Date()) throws -> Date? {
+    @discardableResult static func create(source: URL, destination: URL, force: Bool, now: Date = Date()) throws
+        -> Date?
+    {
         let previous = try snapshots(in: destination)
         if !force, let latest = previous.first,
-           let date = try latest.resourceValues(forKeys: [.creationDateKey]).creationDate,
-           now.timeIntervalSince(date) < 24 * 60 * 60 { return date }
+            let date = try latest.resourceValues(forKeys: [.creationDateKey]).creationDate,
+            now.timeIntervalSince(date) < 24 * 60 * 60
+        {
+            return date
+        }
         let fm = FileManager.default
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
         let staging = destination.appendingPathComponent(".pending-\(UUID())", isDirectory: true)
@@ -38,9 +45,12 @@ enum LibraryBackup {
                 try data.write(to: staging.appendingPathComponent(name), options: .atomic)
             }
         }
-        try "Bookmarker library backup\nSource: \(source.path)\nCreated: \(now.ISO8601Format())\n\nContains all bookmark JSON, including comments, topics, favorite and read state.\nReading copies are not duplicated. To recover, quit Bookmarker, preserve the current library, then copy these JSON files into the library folder.\n".write(to: staging.appendingPathComponent("Backup Info.txt"), atomically: true, encoding: .utf8)
+        try
+            "Bookmarker library backup\nSource: \(source.path)\nCreated: \(now.ISO8601Format())\n\nContains all bookmark JSON, including comments, topics, favorite and read state.\nReading copies are not duplicated. To recover, quit Bookmarker, preserve the current library, then copy these JSON files into the library folder.\n"
+            .write(to: staging.appendingPathComponent("Backup Info.txt"), atomically: true, encoding: .utf8)
         let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
-        let completed = destination.appendingPathComponent("Snapshot-\(stamp)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let completed = destination.appendingPathComponent(
+            "Snapshot-\(stamp)-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try fm.moveItem(at: staging, to: completed)
         for old in try snapshots(in: destination).dropFirst(7) { try fm.removeItem(at: old) }
         return now
