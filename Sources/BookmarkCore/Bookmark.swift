@@ -140,6 +140,18 @@ public enum ArticleParser {
     public static func title(in html: String) -> String {
         capture("<title[^>]*>([\\s\\S]*?)</title>", html).map(clean) ?? ""
     }
+    public static func fullText(in html: String) -> String {
+        var body = html
+        for tag in ["head", "script", "style", "nav", "header", "footer", "aside", "noscript", "form"] {
+            body = body.replacingOccurrences(
+                of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: " ", options: [.regularExpression, .caseInsensitive])
+        }
+        body =
+            capture("<main\\b[^>]*>([\\s\\S]*?)</main>", body)
+            ?? capture("<article\\b[^>]*>([\\s\\S]*?)</article>", body)
+            ?? body
+        return clean(body)
+    }
     public static func parse(_ html: String) -> (title: String, preview: String) {
         let title = Self.title(in: html)
         var body = html

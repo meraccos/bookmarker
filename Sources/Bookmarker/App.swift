@@ -99,7 +99,7 @@ struct LibraryView: View {
                 && (search.isEmpty
                     || [
                         item.title, item.url, item.pageDescription ?? "", item.notes,
-                        item.topics.joined(separator: " "),
+                        item.topics.joined(separator: " "), library.readingSearchText[item.id] ?? "",
                     ].joined(separator: " ").localizedCaseInsensitiveContains(search))
         }.sorted(by: sortOrder.precedes)
     }
@@ -260,7 +260,13 @@ struct LibraryView: View {
         }
     }
     @ViewBuilder private func listContent(_ visible: [Bookmark]) -> some View {
-        if library.bookmarks.isEmpty {
+        if library.bookmarks.isEmpty && library.pendingCloudBookmarks > 0 {
+            ContentUnavailableView(
+                "Downloading bookmark details", systemImage: "icloud.and.arrow.down",
+                description: Text(
+                    "Found \(library.pendingCloudBookmarks) bookmarks in iCloud. They will appear as their details become available."
+                ))
+        } else if library.bookmarks.isEmpty {
             ContentUnavailableView {
                 Label("A little space for good reads", systemImage: "bookmark")
             } description: {
@@ -494,6 +500,12 @@ private struct SidebarSyncStatus: View {
             return (
                 "Setting up iCloud…", "icloud", .secondary,
                 "Copying bookmark entries into iCloud Drive. Reading copies stay on this Mac."
+            )
+        }
+        if library.pendingCloudBookmarks > 0 {
+            return (
+                "\(library.pendingCloudBookmarks) bookmarks downloading…", "icloud.and.arrow.down", .secondary,
+                "Available bookmarks are ready to use. Remaining bookmark details will appear as iCloud downloads them."
             )
         }
         switch library.syncStatus.state {

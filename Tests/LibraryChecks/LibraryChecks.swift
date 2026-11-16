@@ -24,6 +24,28 @@ import Foundation
         precondition(
             library.bookmarks.first?.title == "External title", "External edits must invalidate cached records")
 
+        // An evicted entry must not hide available rows or discard an already loaded row.
+        let placeholder = folder.appendingPathComponent(".\(file.lastPathComponent).icloud")
+        try FileManager.default.moveItem(at: file, to: placeholder)
+        library.reload()
+        precondition(library.pendingCloudBookmarks == 1)
+        precondition(library.bookmarks.first?.title == "External title", "Eviction must preserve a loaded bookmark")
+        let newDevice = Library(folder: folder)
+        precondition(newDevice.pendingCloudBookmarks == 1 && newDevice.bookmarks.isEmpty)
+        precondition(newDevice.error == nil, "Pending downloads are not corrupt records")
+        let available = Bookmark(url: "https://example.com/available", title: "Available immediately")
+        let availableFile = folder.appendingPathComponent("\(available.id.uuidString).json")
+        try encoder.encode(available).write(to: availableFile, options: .atomic)
+        await newDevice.reloadInBackground()
+        precondition(newDevice.bookmarks.map(\.id) == [available.id], "A pending file must not block available rows")
+        try FileManager.default.moveItem(at: placeholder, to: file)
+        await newDevice.reloadInBackground()
+        precondition(
+            newDevice.pendingCloudBookmarks == 0 && newDevice.bookmarks.count == 2,
+            "Hydrated records must join the visible library")
+        try FileManager.default.removeItem(at: availableFile)
+        library.reload()
+
         var stale = library.bookmarks[0]
         bookmark.notes = "External comment"
         let external = try encoder.encode(bookmark)
@@ -64,6 +86,10 @@ import Foundation
         precondition(library.readingCopyCount == 1 && library.readingCopyBytes == cachedHTML.utf8.count)
         let migratedHTML = try await library.readerHTML(bookmark.id)
         precondition(migratedHTML == cachedHTML)
+        await library.refreshReadingSearchIndex()
+        precondition(
+            library.readingSearchText[bookmark.id]?.contains("Offline reading copy") == true,
+            "Saved article text must be searchable")
         library.downloadAllReadingCopies()
         for _ in 0..<200 {
             if !library.downloadProgress.running { break }

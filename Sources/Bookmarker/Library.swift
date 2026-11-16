@@ -1,4 +1,5 @@
 import BookmarkCore
+import Darwin
 import SwiftUI
 
 @MainActor @Observable final class Library {
@@ -6,6 +7,9 @@ import SwiftUI
     let syncStatus = LibrarySyncStatus()
     var isSettingUpCloud = false
     var cloudSetupMessage: String?
+    var pendingCloudBookmarks = 0
+    @ObservationIgnored private var cloudRetry: Task<Void, Never>?
+    @ObservationIgnored private var requestedCloudFiles: Set<URL> = []
     var backupInProgress = false
     var lastBackupDate: Date?
     var backupError: String?
@@ -25,6 +29,7 @@ import SwiftUI
     var downloadProgress = DownloadProgress()
     var readingCopyCount = 0
     var readingCopyBytes: Int64 = 0
+    var readingSearchText: [UUID: String] = [:]
     @ObservationIgnored private var batchDownload: Task<Void, Never>?
     @ObservationIgnored private var batchToken = UUID()
     @ObservationIgnored private var testReadingCopiesFolder: URL?
@@ -49,6 +54,8 @@ import SwiftUI
     @ObservationIgnored private var presenter: LibraryPresenter?
     @ObservationIgnored private var pendingReload: Task<Void, Never>?
     private func observeFolder() {
+        cloudRetry?.cancel()
+        requestedCloudFiles.removeAll()
         syncStatus.watch(folder)
         presenter?.stop()
         pendingReload?.cancel()
@@ -67,6 +74,7 @@ import SwiftUI
     deinit {
         presenter?.stop()
         pendingReload?.cancel()
+        cloudRetry?.cancel()
     }
     init(
         folder initialFolder: URL? = nil,
@@ -92,12 +100,34 @@ import SwiftUI
         var bookmarks: [Bookmark]
         var snapshot: [String: Data]
         var invalid: [String]
+        var pending: [URL] = []
+    }
+    // Keep this synchronous: the I/O policy belongs to the current thread and must
+    // be restored before a Swift task can suspend or reuse that thread (Apple TN3150).
+    private nonisolated static func localBookmarkData(_ file: URL) throws -> Data? {
+        let policy = getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD)
+        guard policy >= 0,
+            setiopolicy_np(
+                IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+                == 0
+        else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        defer { _ = setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, policy) }
+        do { return try Data(contentsOf: file) } catch {
+            var cause = error as NSError
+            while true {
+                if cause.domain == NSPOSIXErrorDomain && cause.code == Int(EDEADLK) { return nil }
+                guard let underlying = cause.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+                cause = underlying
+            }
+            throw error
+        }
     }
     private nonisolated static func scan(folder: URL, previous: [Bookmark], snapshot: [String: Data]) throws -> Scan {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let entries = try CoordinatedFiles.read(folder) {
-            try FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)
-        }
+        // Enumerating names must not wait for iCloud to materialize directory contents.
+        let entries = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
         // Finder may evict an iCloud file, leaving a hidden .name.json.icloud placeholder.
         let files = Set(
             entries.compactMap { file -> URL? in
@@ -114,8 +144,31 @@ import SwiftUI
         var seen: Set<UUID> = []
         for file in files {
             do {
-                let data = try CoordinatedFiles.data(file)
                 let name = file.lastPathComponent
+                // stat inspects local metadata without asking File Provider to download.
+                // A coordinated read would wait for an evicted file before showing any rows.
+                var info = stat()
+                let exists = file.withUnsafeFileSystemRepresentation { path in
+                    path.map { lstat($0, &info) == 0 } ?? false
+                }
+                if !exists || (info.st_flags & UInt32(SF_DATALESS)) != 0 {
+                    result.pending.append(file)
+                    if let cached = existing[name] {
+                        result.bookmarks.append(cached)
+                        result.snapshot[name] = snapshot[name]
+                    }
+                    continue
+                }
+                // Bookmarks are published with atomic replacement. Reading the local
+                // version is sufficient here; writes still validate coordinated snapshots.
+                guard let data = try localBookmarkData(file) else {
+                    result.pending.append(file)
+                    if let cached = existing[name] {
+                        result.bookmarks.append(cached)
+                        result.snapshot[name] = snapshot[name]
+                    }
+                    continue
+                }
                 let bookmark: Bookmark
                 if data == snapshot[name], let cached = existing[name] {
                     bookmark = cached
@@ -147,6 +200,23 @@ import SwiftUI
         revision &+= 1
         if scan.bookmarks != bookmarks { bookmarks = scan.bookmarks }
         snapshot = scan.snapshot
+        pendingCloudBookmarks = scan.pending.count
+        requestedCloudFiles.formIntersection(Set(scan.pending))
+        cloudRetry?.cancel()
+        if !scan.pending.isEmpty {
+            let origin = folder
+            let downloads = scan.pending.filter { requestedCloudFiles.insert($0).inserted }
+            Task.detached(priority: .utility) {
+                for file in downloads { try? FileManager.default.startDownloadingUbiquitousItem(at: file) }
+            }
+            // File presenters do not reliably announce hydration on every macOS version.
+            // Retry only while metadata files are pending, never while the library is idle.
+            cloudRetry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard let self, self.folder == origin else { return }
+                await self.reloadInBackground()
+            }
+        }
         if !scan.invalid.isEmpty && scan.invalid != lastInvalid {
             error = "Couldn’t read \(scan.invalid.joined(separator: ", ")). These files were left untouched."
         }
@@ -341,6 +411,7 @@ import SwiftUI
         guard folder == originFolder else { throw CancellationError() }
         if let cached, cached.contains("<main>"), cached.contains("</main>") {
             await recordReadingTime(cached, for: id)
+            readingSearchText[id] = ArticleParser.fullText(in: cached)
             readerCache.setObject(cached as NSString, forKey: file as NSURL, cost: cached.utf8.count)
             return cached
         }
@@ -402,6 +473,7 @@ import SwiftUI
             throw CancellationError()
         }
         readerCache.setObject(html as NSString, forKey: file as NSURL, cost: html.utf8.count)
+        readingSearchText[id] = ArticleParser.fullText(in: html)
         await recordReadingTime(html, for: id)
         await refreshReadingCopyStats(backfillReadingTimes: false)
         return html
@@ -431,6 +503,7 @@ import SwiftUI
         let copy = undoable && undoManager != nil ? try? CoordinatedFiles.data(reader) : nil
         readerCache.removeObject(forKey: preferredReader as NSURL)
         metadataMessages[id] = nil
+        readingSearchText[id] = nil
         do {
             try CoordinatedFiles.write(file, options: .forDeleting) { coordinatedURL in
                 guard (try? Data(contentsOf: coordinatedURL)) == snapshot[file.lastPathComponent] else {
@@ -532,9 +605,31 @@ import SwiftUI
             guard folder == origin else { return }
             readerCache.removeAllObjects()
             await refreshReadingCopyStats()
+            await refreshReadingSearchIndex()
         } catch {
             if folder == origin { self.error = "Couldn’t organize reading copies: \(error.localizedDescription)" }
         }
+    }
+    func refreshReadingSearchIndex() async {
+        let origin = folder
+        let destination = readingCopiesFolder
+        let ids = Set(bookmarks.map(\.id))
+        let index = await Task.detached(priority: .utility) {
+            var result: [UUID: String] = [:]
+            let files =
+                (try? FileManager.default.contentsOfDirectory(at: destination, includingPropertiesForKeys: nil)) ?? []
+            for file in files where file.lastPathComponent.hasSuffix(".reader.html") {
+                let name = String(file.lastPathComponent.dropLast(".reader.html".count))
+                guard let id = UUID(uuidString: name), ids.contains(id),
+                    let data = try? Data(contentsOf: file),
+                    let html = String(data: data, encoding: .utf8)
+                else { continue }
+                result[id] = ArticleParser.fullText(in: html)
+            }
+            return result
+        }.value
+        guard folder == origin, !Task.isCancelled else { return }
+        readingSearchText = index
     }
     func refreshReadingCopyStats(backfillReadingTimes: Bool = true) async {
         let origin = folder
@@ -671,9 +766,6 @@ import SwiftUI
                 try LocalReadingCopies.copy(from: oldCopies, to: newCopies)
                 try LibraryCloudSetup.copyLibrary(from: origin, to: destination)
             }.value
-            let scan = try await Task.detached(priority: .utility) {
-                try Self.scan(folder: destination, previous: [], snapshot: [:])
-            }.value
             guard folder == origin else { return }
             undoManager?.removeAllActions(withTarget: self)
             readerDownloads.removeAll()
@@ -689,8 +781,10 @@ import SwiftUI
             lastInvalid = []
             snapshot = [:]
             bookmarks = []
-            apply(scan)
+            pendingCloudBookmarks = 0
             observeFolder()
+            isSettingUpCloud = false
+            await reloadInBackground()
             cloudSetupMessage = "Using iCloud Drive. Your previous library remains at \(origin.path)."
         } catch {
             cloudSetupMessage = error.localizedDescription
@@ -722,10 +816,13 @@ import SwiftUI
         backupError = nil
         cloudSetupMessage = nil
         lastInvalid = []
+        snapshot = [:]
+        bookmarks = []
+        pendingCloudBookmarks = 0
         folder = url
         UserDefaults.standard.set(url.path, forKey: "libraryPath")
-        reload()
         observeFolder()
+        Task { await reloadInBackground() }
     }
     func update(_ id: UUID, actionName: String = "Edit Bookmark", change: (inout Bookmark) -> Void) {
         guard var bookmark = bookmarks.first(where: { $0.id == id }) else { return }

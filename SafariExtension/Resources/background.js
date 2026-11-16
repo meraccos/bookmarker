@@ -1,13 +1,21 @@
 const menuID = "save-to-bookmarker";
 
-browser.runtime.onInstalled.addListener(() => {
+async function registerMenu() {
+  // Safari can discard an extension's registered menus when an unsigned local
+  // build is disabled or the background worker is replaced. Rebuild the menu
+  // whenever the worker starts instead of relying on the one-time install event.
+  await browser.contextMenus.removeAll();
   browser.contextMenus.create({
     id: menuID,
     title: "Save to Bookmarker",
     contexts: ["page", "selection", "link", "image", "video", "audio"],
     documentUrlPatterns: ["http://*/*", "https://*/*"]
   });
-});
+}
+
+browser.runtime.onInstalled.addListener(registerMenu);
+browser.runtime.onStartup.addListener(registerMenu);
+registerMenu().catch(error => console.error("Could not register Bookmarker menu:", error));
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== menuID) return;

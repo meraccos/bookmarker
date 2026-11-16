@@ -13,11 +13,12 @@ import Foundation
         testArtworkMetadata()
         testArtworkFallbackAndUnsafeURLs()
         testHTMLDescriptions()
+        testFullTextExtraction()
         testSidebarTotals()
         testSafariSaveRequests()
         testSorting()
         testReadingTimeEstimate()
-        print("Passed all 14 bookmark core checks.")
+        print("Passed all 15 bookmark core checks.")
     }
     static func testExtractsFirstTwoArticleSentencesAndIgnoresNavigation() {
         let html = """
@@ -149,6 +150,12 @@ import Foundation
                 in: "<meta name='description' content='  '><meta name='twitter:description' content='Twitter text'>")
                 == "Twitter text")
         precondition(ArticleParser.description(in: "<title>No description</title><p>Article content.</p>") == "")
+    }
+
+    static func testFullTextExtraction() {
+        let html =
+            "<head><style>hidden</style></head><body><nav>menu</nav><main>Unique searchable phrase &amp; more text.</main></body>"
+        precondition(ArticleParser.fullText(in: html) == "Unique searchable phrase & more text.")
     }
 
     static func testSidebarTotals() {

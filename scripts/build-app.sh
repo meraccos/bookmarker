@@ -5,6 +5,9 @@ cd "$(dirname "$0")/.."
 BUILD_STAGING=$(mktemp -d -t bookmarker-build)
 trap 'rm -rf -- "$BUILD_STAGING"' EXIT
 APP="$BUILD_STAGING/Bookmarker.app"
+OUTPUT_APP="${BOOKMARKER_APP_PATH:-$PWD/dist/Bookmarker.app}"
+APP_VERSION="${BOOKMARKER_VERSION:-0.4.0}"
+BUILD_NUMBER="${BOOKMARKER_BUILD_NUMBER:-4}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Bookmarker "$APP/Contents/MacOS/Bookmarker"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -16,8 +19,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Bookmarker</string>
 <key>CFBundleDisplayName</key><string>Bookmarker</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleShortVersionString</key><string>__APP_VERSION__</string>
+<key>CFBundleVersion</key><string>__BUILD_NUMBER__</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>CFBundleURLTypes</key><array><dict>
@@ -27,6 +31,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
 </dict></plist>
 PLIST
+sed -i '' -e "s/__APP_VERSION__/$APP_VERSION/" -e "s/__BUILD_NUMBER__/$BUILD_NUMBER/" "$APP/Contents/Info.plist"
+cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 EXTENSION="$APP/Contents/PlugIns/BookmarkerSafari.appex"
 mkdir -p "$EXTENSION/Contents/MacOS"
 source ./scripts/build-config.sh
@@ -38,18 +44,22 @@ cp SafariExtension/Info.plist "$EXTENSION/Contents/Info.plist"
 mkdir -p "$EXTENSION/Contents/Resources"
 cp SafariExtension/Resources/* "$EXTENSION/Contents/Resources/"
 SIGNING_IDENTITY="${BOOKMARKER_SIGNING_IDENTITY:--}"
+# Finder/File Provider metadata on generated bundles can make codesign fail with
+# "resource fork, Finder information, or similar detritus not allowed".
+# Clear extended attributes only from the generated app, never the sources.
 xattr -cr "$APP"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements SafariExtension/entitlements.plist "$EXTENSION"
+xattr -cr "$APP"
 codesign --force --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
-mkdir -p "$PWD/dist"
-ditto --norsrc --noextattr "$APP" "$PWD/dist/Bookmarker.app"
+mkdir -p "$(dirname "$OUTPUT_APP")"
+ditto --norsrc --noextattr "$APP" "$OUTPUT_APP"
 # A file provider may restore FinderInfo immediately after publishing the bundle.
 for attempt in 1 2 3; do
-  xattr -cr "$PWD/dist/Bookmarker.app"
-  if codesign --verify --deep --strict "$PWD/dist/Bookmarker.app" 2>/dev/null; then
+  xattr -cr "$OUTPUT_APP"
+  if codesign --verify --deep --strict "$OUTPUT_APP" 2>/dev/null; then
     break
   fi
 done
-codesign --verify --deep --strict "$PWD/dist/Bookmarker.app"
-echo "Built $PWD/dist/Bookmarker.app"
+codesign --verify --deep --strict "$OUTPUT_APP"
+echo "Built $OUTPUT_APP"
